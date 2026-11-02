@@ -1,0 +1,76 @@
+# gcp-janitor configuration
+# Default configuration template for policy-based GCP resource cleanup.
+
+[general]
+# GCP project ID to monitor.
+# If omitted or empty, gcp-janitor attempts to resolve it via Google Cloud
+# Application Default Credentials (ADC) or the GKE metadata server.
+project_id = ""
+
+# Locations/regions to scan for KMS resources.
+# Cloud KMS supports "global" as well as specific regions (e.g. "us-central1").
+locations = ["global", "us-west1"]
+
+# When true, logs actions that would be taken without modifying any GCP resources.
+dry_run = true
+
+# Polling interval in seconds when running as a continuous daemon in Kubernetes.
+interval_seconds = 3600
+
+# -----------------------------------------------------------------------------
+# Google Cloud KMS Configuration
+# -----------------------------------------------------------------------------
+[kms]
+enabled = true
+
+# -----------------------------------------------------------------------------
+# Default KMS Policy
+#
+# Applied to all key rings and crypto keys unless explicitly overridden
+# in a [kms.keyrings.<name>] section below.
+# -----------------------------------------------------------------------------
+[kms.default]
+# Age threshold (in days) before disabling active CryptoKeyVersions (state = DISABLED).
+# Set to 0 to disable this transition.
+disable_after_days = 30
+
+# Age threshold (in days) before scheduling destruction (soft delete) for
+# CryptoKeyVersions. Cloud KMS places versions into DESTROY_SCHEDULED state
+# with a recovery window (typically 30 days) before permanent destruction.
+# Set to 0 to disable this transition.
+soft_delete_after_days = 60
+
+# When true, attempts to permanently delete empty key rings once all child
+# keys and versions have been completely destroyed.
+hard_delete_empty_keyrings = false
+
+# Exclude CryptoKeys if they contain any of these label keys, regardless of value.
+exclude_label_keys = ["do-not-delete", "compliance-hold"]
+
+# Exclude CryptoKeys from cleanup if they match these exact label key-value pairs.
+[kms.default.exclude_labels]
+protected = "true"
+env = "production"
+"janitor/ignore" = "true"
+
+# -----------------------------------------------------------------------------
+# Keyring-Specific Overrides
+#
+# Specific policies applied to a given key ring. Any field omitted from a
+# keyring table inherits its setting from [kms.default].
+# -----------------------------------------------------------------------------
+
+# Example 1: Aggressive cleanup policy for ephemeral / CI testing key rings
+[kms.keyrings."ci-ephemeral-keyring"]
+disable_after_days = 7
+soft_delete_after_days = 14
+hard_delete_empty_keyrings = true
+
+[kms.keyrings."ci-ephemeral-keyring".exclude_labels]
+keep = "true"
+
+# Example 2: Conservative / high-security policy (disable only, never destroy)
+[kms.keyrings."sensitive-workload-keyring"]
+disable_after_days = 90
+soft_delete_after_days = 0         # 0 = never soft delete / destroy
+hard_delete_empty_keyrings = false # Never delete this key ring
