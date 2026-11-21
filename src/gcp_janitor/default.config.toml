@@ -38,11 +38,7 @@ disable_after_days = 30
 # CryptoKeyVersions. Cloud KMS places versions into DESTROY_SCHEDULED state
 # with a recovery window (typically 30 days) before permanent destruction.
 # Set to 0 to disable this transition.
-soft_delete_after_days = 60
-
-# When true, attempts to permanently delete empty key rings once all child
-# keys and versions have been completely destroyed.
-hard_delete_empty_keyrings = false
+delete_after_days = 60
 
 # Exclude CryptoKeys if they contain any of these label keys, regardless of value.
 exclude_label_keys = ["do-not-delete", "compliance-hold"]

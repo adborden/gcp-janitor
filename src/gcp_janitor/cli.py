@@ -82,7 +82,3 @@ def main():
         logging.getLogger(__package__).setLevel(logging.DEBUG)
 
     asyncio.run(run_controller(args))
-
-
-if __name__ == "__main__":
-    main()

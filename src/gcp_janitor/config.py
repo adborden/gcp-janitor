@@ -5,25 +5,22 @@ from pathlib import Path
 import tomllib
 from typing import Self
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class KmsPolicy(BaseModel):
+class KmsPolicy(BaseSettings):
     """Concrete policy defining retention thresholds and exclusion criteria."""
 
     disable_after_days: int = Field(
-        default=30,
+        default=14,
         ge=0,
         description="Days before disabling active versions (0 to disable)",
     )
-    soft_delete_after_days: int = Field(
-        default=60,
+    delete_after_days: int = Field(
+        default=30,
         ge=0,
         description="Days before scheduling destruction (0 to disable)",
-    )
-    hard_delete_empty_keyrings: bool = Field(
-        default=False,
-        description="Whether to permanently delete empty key rings",
     )
     exclude_labels: dict[str, str] = Field(
         default_factory=dict,
@@ -57,7 +54,7 @@ class KmsPolicy(BaseModel):
         return False
 
 
-class KmsKeyringOverride(BaseModel):
+class KmsKeyringOverride(BaseSettings):
     """Optional overrides for a specific keyring. Unset fields fallback to default."""
 
     disable_after_days: int | None = Field(default=None, ge=0)
@@ -67,7 +64,7 @@ class KmsKeyringOverride(BaseModel):
     exclude_label_keys: list[str] | None = None
 
 
-class KmsConfig(BaseModel):
+class KmsConfig(BaseSettings):
     """KMS service configuration."""
 
     enabled: bool = True
@@ -114,7 +111,7 @@ class KmsConfig(BaseModel):
         return KmsPolicy.model_validate(merged)
 
 
-class GeneralConfig(BaseModel):
+class GeneralConfig(BaseSettings):
     """Daemon execution parameters."""
 
     project_id: str = Field(default="", description="GCP project ID")
@@ -123,7 +120,7 @@ class GeneralConfig(BaseModel):
     interval_seconds: int = Field(default=3600, gt=0)
 
 
-class Config(BaseModel):
+class Config(BaseSettings):
     """Root configuration object matching default.config.toml."""
 
     general: GeneralConfig = Field(default_factory=GeneralConfig)

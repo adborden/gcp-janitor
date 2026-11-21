@@ -2,9 +2,11 @@ import asyncio
 import datetime
 import logging
 
+from google.api_core import exceptions
 from google.cloud.kms_v1 import KeyManagementServiceAsyncClient
 
 from . import kms
+from .config import Config
 
 log = logging.getLogger(__name__)
 
@@ -17,34 +19,72 @@ KMS_ENABLED = "ENABLED"
 KMS_DISABLED = "DISABLED"
 KMS_DELETED = "DESTROY_SCHEDULED"
 
+ACTION_DISABLE = "disable"
+ACTION_DELETE = "delete"
+
 
 async def main(args):
     log.info("Starting controller")
 
     # libresource.().
+    #
+    config = Config.load(args.config)
+    config.general.project_id = args.project or config.general.project_id
 
     if args.dry_run:
         log.info("Dry run mode enabled. No changes will be made.")
 
+    client = await kms.get_client()
+
+    while True:
+        try:
+            try:
+                delete_threshold = datetime.datetime.now(
+                    datetime.timezone.utc
+                ) - datetime.timedelta(days=30)
+                await perform_action(
+                    args, client, delete_threshold, action=ACTION_DELETE
+                )
+                disable_threshold = datetime.datetime.now(
+                    datetime.timezone.utc
+                ) - datetime.timedelta(days=14)
+                await perform_action(
+                    args, client, disable_threshold, action=ACTION_DISABLE
+                )
+            except (exceptions.GoogleAPICallError, exceptions.RetryError):
+                # RetryError is raised once KMS_RETRY times out (e.g. sustained
+                # rate limiting); GoogleAPICallError covers non-retryable API
+                # errors such as PermissionDenied. Try again next iteration.
+                log.exception("KMS API error, will retry next iteration")
+
+            # sleep before next iteration
+            await asyncio.sleep(DEFAULT_POLL_INTERVAL)
+        except asyncio.CancelledError:
+            log.info("Controller cancelled, exiting")
+            return
+
+
+async def perform_action(
+    args, client, threshold: datetime.datetime, action=ACTION_DISABLE
+):
     project_id = args.project
     location_id = args.location or "us-west1"
     keyring_id = args.keyring
     key_id = args.key
 
-    disable_threshold = datetime.datetime.now(
-        datetime.timezone.utc
-    ) - datetime.timedelta(days=14)
-    delete_threshold = datetime.datetime.now(
-        datetime.timezone.utc
-    ) - datetime.timedelta(days=30)
+    if action == ACTION_DELETE:
+        state = KMS_DISABLED
+        target_state = KMS_DELETED
+    elif action == ACTION_DISABLE:
+        state = KMS_ENABLED
+        target_state = KMS_DISABLED
+    else:
+        raise Exception(f"Unknown action: {action}")
 
-    client = await kms.get_client()
-
-    # delete resources
     async for crypto_key_version in kms.iter_crypto_key_versions(
         client,
         parent=f"projects/{project_id}/locations/{location_id}/keyRings/{keyring_id}/cryptoKeys/{key_id}",
-        filter=f"state = {KMS_DISABLED}",
+        filter=f"state = {state}",
     ):
         log.debug(
             "Found crypto key version: %s, created=%s, generated=%s",
@@ -52,9 +92,9 @@ async def main(args):
             crypto_key_version.create_time,
             crypto_key_version.generate_time,
         )
-        if not crypto_key_version.state.name == KMS_DISABLED:
+        if not crypto_key_version.state.name == state:
             log.warning(
-                "Unexpected state={crypto_key_version.state.name} for crypto key version: %s",
+                f"Unexpected state={crypto_key_version.state.name} for crypto key version: %s",
                 crypto_key_version.name,
             )
             continue
@@ -64,58 +104,46 @@ async def main(args):
                 crypto_key_version.name,
             )
             continue
-        if crypto_key_version.create_time < delete_threshold:
+        if crypto_key_version.create_time < threshold:
             log.info(
-                "Crypto key version %s is older than threshold, deleting it",
+                "Crypto key version is older than threshold, deleting it action=%s threshold=%s create_time=%s name=%s",
+                action,
+                threshold,
+                crypto_key_version.create_time,
                 crypto_key_version.name,
             )
-            await kms.destroy_crypto_key_version(
-                client,
-                crypto_key_version,
-                args.dry_run,
-            )
 
-    # disable resources
-    async for crypto_key_version in kms.iter_crypto_key_versions(
-        client,
-        parent=f"projects/{project_id}/locations/{location_id}/keyRings/vault-fl-a14n-net/cryptoKeys/vault-fl-a14n-net",
-        filter=f"state = {KMS_ENABLED}",
-    ):
-        disable_threshold = datetime.datetime.now(
-            datetime.timezone.utc
-        ) - datetime.timedelta(days=14)
-
-        log.debug(
-            "Found crypto key version: %s, created=%s, generated=%s",
-            crypto_key_version.name,
-            crypto_key_version.create_time,
-            crypto_key_version.generate_time,
-        )
-        if not crypto_key_version.state.name == KMS_ENABLED:
-            log.warning(
-                "Unexpected state={crypto_key_version.state.name} for crypto key version: %s",
-                crypto_key_version.name,
-            )
-            continue
-
-        if crypto_key_version.create_time is None:
-            log.warning(
-                "Crypto key version %s has no create_time, skipping",
-                crypto_key_version.name,
-            )
-            continue
-
-        if crypto_key_version.create_time < disable_threshold:
-            log.info(
-                "Crypto key version %s is older than threshold, disabling it",
-                crypto_key_version.name,
-            )
-            await kms.crypto_key_version_set_state(
-                client,
-                crypto_key_version,
-                KMS_DELETED,
-                args.dry_run,
-            )
-
-    # sleep before next iteration
-    await asyncio.sleep(DEFAULT_POLL_INTERVAL)
+            try:
+                if action == ACTION_DISABLE:
+                    await kms.crypto_key_version_set_state(
+                        client,
+                        crypto_key_version,
+                        target_state,
+                        args.dry_run,
+                    )
+                elif action == ACTION_DELETE:
+                    await kms.destroy_crypto_key_version(
+                        client,
+                        crypto_key_version,
+                        args.dry_run,
+                    )
+                else:
+                    raise Exception(f"Unknown action: {action}")
+            except exceptions.FailedPrecondition as e:
+                # The version's state changed since it was listed, e.g. a
+                # retried destroy that had already been applied, or someone
+                # re-enabled/destroyed it out of band.
+                log.warning(
+                    "Skipping crypto key version, state changed action=%s name=%s error=%s",
+                    action,
+                    crypto_key_version.name,
+                    e,
+                )
+            except (exceptions.GoogleAPICallError, exceptions.RetryError):
+                log.exception(
+                    "Failed to update crypto key version action=%s name=%s",
+                    action,
+                    crypto_key_version.name,
+                )
+                # If retries were exhausted, abort the batch
+                break

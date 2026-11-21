@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Sequence
 import logging
 from typing import NamedTuple
 
+from google.api_core import exceptions, retry_async
 from google.cloud.kms import (
     CryptoKey,
     CryptoKeyVersion,
@@ -13,6 +14,22 @@ from google.cloud.kms import (
 )
 
 log = logging.getLogger(__name__)
+
+# The generated client only retries DeadlineExceeded and ServiceUnavailable by
+# default. Also retry ResourceExhausted (gRPC RESOURCE_EXHAUSTED / HTTP 429) so
+# quota/rate-limit rejections back off instead of failing immediately. A
+# rate-limited request was never executed, so retrying it is safe.
+KMS_RETRY = retry_async.AsyncRetry(
+    initial=1.0,
+    maximum=60.0,
+    multiplier=2.0,
+    predicate=retry_async.if_exception_type(
+        exceptions.ResourceExhausted,
+        exceptions.ServiceUnavailable,
+        exceptions.DeadlineExceeded,
+    ),
+    timeout=300.0,
+)
 
 
 class KMSItem(NamedTuple):
@@ -52,7 +69,8 @@ async def crypto_key_version_set_state(
         request={
             "crypto_key_version": crypto_key_version,
             "update_mask": update_mask,
-        }
+        },
+        retry=KMS_RETRY,
     )
     log.info("Updated key version: %s, state=%s", updated_version.name, state)
 
@@ -74,14 +92,12 @@ async def destroy_crypto_key_version(
     if dry_run:
         return
 
-    # Build the update mask.
-    update_mask = {"paths": ["state"]}
-
-    # Call the API to update the key version
+    # Call the API to destroy the key version
     destroyed_version = await client.destroy_crypto_key_version(
         request={
             "name": crypto_key_version.name,
-        }
+        },
+        retry=KMS_RETRY,
     )
     log.info("Desotryed version=%s", destroyed_version.name)
 
@@ -106,7 +122,7 @@ async def iter_key_rings(
         KeyRing: Discovered key ring resources.
     """
     log.debug("Listing key rings in parent: %s", parent)
-    pager = await client.list_key_rings(parent=parent)
+    pager = await client.list_key_rings(parent=parent, retry=KMS_RETRY)
     async for key_ring in pager:
         log.debug("Found KeyRing: %s", key_ring.name)
         yield key_ring
@@ -128,7 +144,7 @@ async def iter_crypto_keys(
         CryptoKey: Discovered crypto key resources.
     """
     log.debug("Listing crypto keys in key ring: %s", parent)
-    pager = await client.list_crypto_keys(parent=parent)
+    pager = await client.list_crypto_keys(parent=parent, retry=KMS_RETRY)
     async for crypto_key in pager:
         log.debug(
             "Found CryptoKey: %s (labels=%s)", crypto_key.name, dict(crypto_key.labels)
@@ -158,7 +174,7 @@ async def iter_crypto_key_versions(
     if filter:
         request["filter"] = filter
 
-    pager = await client.list_crypto_key_versions(request=request)
+    pager = await client.list_crypto_key_versions(request=request, retry=KMS_RETRY)
     async for version in pager:
         log.debug(
             "Found CryptoKeyVersion: %s (state=%s)",
