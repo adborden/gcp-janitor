@@ -26,8 +26,6 @@ ACTION_DELETE = "delete"
 async def main(args):
     log.info("Starting controller")
 
-    # libresource.().
-    #
     config = Config.load(args.config)
     config.general.project_id = args.project or config.general.project_id
 
@@ -41,14 +39,14 @@ async def main(args):
             try:
                 delete_threshold = datetime.datetime.now(
                     datetime.timezone.utc
-                ) - datetime.timedelta(days=30)
+                ) - datetime.timedelta(days=config.kms.default.delete_after_days)
                 await perform_action(
                     args, client, delete_threshold, action=ACTION_DELETE
                 )
 
                 disable_threshold = datetime.datetime.now(
                     datetime.timezone.utc
-                ) - datetime.timedelta(days=14)
+                ) - datetime.timedelta(days=config.kms.default.disable_after_days)
                 await perform_action(
                     args, client, disable_threshold, action=ACTION_DISABLE
                 )

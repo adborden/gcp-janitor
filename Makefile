@@ -15,3 +15,6 @@ setup:
 
 run:
 	uv run gcp-janitor --dry-run --project cloud-294216 --keyring vault-fl-a14n-net --key vault-fl-a14n-net
+
+test:
+	uv run pytest
