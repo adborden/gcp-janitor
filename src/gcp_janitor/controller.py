@@ -45,6 +45,7 @@ async def main(args):
                 await perform_action(
                     args, client, delete_threshold, action=ACTION_DELETE
                 )
+
                 disable_threshold = datetime.datetime.now(
                     datetime.timezone.utc
                 ) - datetime.timedelta(days=14)
@@ -67,6 +68,11 @@ async def main(args):
 async def perform_action(
     args, client, threshold: datetime.datetime, action=ACTION_DISABLE
 ):
+    log.info(
+        "Looking for stale key versions action=%s threshold=%s",
+        action,
+        threshold,
+    )
     project_id = args.project
     location_id = args.location or "us-west1"
     keyring_id = args.keyring
