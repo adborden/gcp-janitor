@@ -1,0 +1,31 @@
+# Example gcp-janitor configuration, mounted from a ConfigMap at
+# /etc/gcp-janitor/config.toml. Replace this file in an overlay with
+# configMapGenerator behavior: replace.
+
+[general]
+# GCP project ID. Leave empty to resolve via Application Default Credentials
+# or the GKE metadata server.
+project_id = ""
+
+# Locations to scan for KMS resources.
+locations = ["global", "us-west1"]
+
+# Log actions without modifying any GCP resources.
+dry_run = true
+
+# Seconds between controller iterations.
+interval_seconds = 3600
+
+[kms]
+enabled = true
+
+# Default policy applied to all key rings unless overridden below.
+[kms.default]
+# Days before disabling ENABLED CryptoKeyVersions (0 to disable).
+disable_after_days = 14
+
+# Days before scheduling destruction of DISABLED CryptoKeyVersions (0 to disable).
+delete_after_days = 30
+
+# Skip CryptoKeys carrying any of these label keys, regardless of value.
+exclude_label_keys = ["do-not-delete", "compliance-hold"]

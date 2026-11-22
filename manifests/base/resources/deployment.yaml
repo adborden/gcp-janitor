@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gcp-janitor
+spec:
+  # Single long-running controller loop; never run two copies at once.
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      serviceAccountName: gcp-janitor
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        # Matches the numeric USER in the Dockerfile.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gcp-janitor
+          image: gcp-janitor
+          imagePullPolicy: Always
+          args:
+            - --config=/etc/gcp-janitor/config.toml
+            - --project=$(PROJECT_ID)
+            - --location=$(LOCATION)
+            - --keyring=$(KEYRING_ID)
+            - --key=$(KEY_ID)
+          env:
+            # Workload Identity Federation: ADC reads this external_account
+            # config, which exchanges the projected token below with Google STS.
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/gcp/credential-configuration.json
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/gcp-janitor
+              readOnly: true
+            - name: gcp-credentials
+              mountPath: /var/run/secrets/gcp
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: gcp-janitor-config
+        - name: gcp-credentials
+          projected:
+            defaultMode: 0440
+            sources:
+              # Short-lived token scoped to the GCP pool provider only; it is not
+              # valid against the Kubernetes API. Must match the provider's
+              # allowed audience and the "audience" in the credential config.
+              - serviceAccountToken:
+                  audience: //iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
+                  expirationSeconds: 3600
+                  path: token
+              - configMap:
+                  name: gcp-janitor-gcp-credentials
+                  items:
+                    - key: credential-configuration.json
+                      path: credential-configuration.json
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

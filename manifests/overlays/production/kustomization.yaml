@@ -1,0 +1,54 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Must match the Workload Identity principal:
+# system:serviceaccount:gcp-janitor:gcp-janitor
+namespace: gcp-janitor
+
+resources:
+  - resources/namespace.yaml
+  - ../../base
+
+configMapGenerator:
+  - name: gcp-janitor-gcp-credentials
+    behavior: replace
+    files:
+      - credential-configuration.json=files/credential-configuration.json
+
+patches:
+  # Strategic merge so env entries merge by name and keep the base's
+  # GOOGLE_APPLICATION_CREDENTIALS.
+  - target:
+      kind: Deployment
+      name: gcp-janitor
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gcp-janitor
+      spec:
+        template:
+          spec:
+            containers:
+              - name: gcp-janitor
+                env:
+                  - name: PROJECT_ID
+                    value: cloud-294216
+                  - name: LOCATION
+                    value: us-west1
+                  - name: KEYRING_ID
+                    value: vault-fl-a14n-net
+                  - name: KEY_ID
+                    value: vault-fl-a14n-net
+  # Token audience must match the "audience" in files/credential-configuration.json.
+  # The provider sets no allowed_audiences, so this is its canonical resource name.
+  - target:
+      kind: Deployment
+      name: gcp-janitor
+    patch: |
+      - op: test
+        path: /spec/template/spec/volumes/1/name
+        value: gcp-credentials
+      - op: replace
+        path: /spec/template/spec/volumes/1/projected/sources/0/serviceAccountToken/audience
+        value: //iam.googleapis.com/projects/863555219739/locations/global/workloadIdentityPools/fl-a14n-net/providers/fl-a14n-net
